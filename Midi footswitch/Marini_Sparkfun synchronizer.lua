@@ -75,25 +75,77 @@ end
 
 --reaper.ShowConsoleMsg(stringToHex(createSysex(msg)))
 --reaper.SendMIDIMessageToHardware(id, createSysex(msg))
+local function getNameItems()
+
+  local sparkfunNamesItems = {}
+  local sparkfunNamesTrackID = nil
+  
+  for i=0, reaper.CountTracks(0)-1 do
+    local track = reaper.GetTrack(0,i)
+    local _, trackName = reaper.GetTrackName(track)
+    --reaper.ShowConsoleMsg(trackName .. "\n")
+    if string.upper(trackName):match("SPARKFUN NAMES")then
+      sparkfunNamesTrackID = track
+    end
+  end
+  
+  if sparkfunNamesTrackID == nil then return {} end
+  
+  for i=0, reaper.CountMediaItems(0) -1 do
+      --reaper.ShowConsoleMsg(tostring(reaper.GetMediaItem_Track(reaper.GetMediaItem(0,i))))
+    if reaper.GetMediaItem_Track(reaper.GetMediaItem(0,i)) == sparkfunNamesTrackID then 
+      --local _, trackName = reaper.GetTrackName(reaper.GetMediaItem_Track(reaper.GetMediaItem(0,i)))
+      --reaper.ShowConsoleMsg( trackName)
+      local item = reaper.GetMediaItem(0,i)
+      local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+      local itemEnd = reaper.GetMediaItemInfo_Value(item, "D_LENGTH") + itemStart
+      local _, itemName =  reaper.GetSetMediaItemInfo_String(item ,"P_NOTES", '', false)
+      table.insert(sparkfunNamesItems,
+      {["start"]= itemStart,
+        ["end"]= itemEnd,
+        ["name"]= itemName
+      })
+    end
+  end
+  return sparkfunNamesItems
+end
 
 
 local lastPos = nil
-local lastRegion = nil
+local lastName = nil
 
 local function loop()
-  if reaper.GetCursorPosition() ~= lastPos then
+
+    
     lastPos =  reaper.GetCursorPosition()
-    if  getCurrRegionNane() ~= lastRegion then
+    local currName = "No preset"
+  
+    for i, val in ipairs( getNameItems()) do
+      if (lastPos >= val["start"] and lastPos <= val["end"]) then
+        --reaper.ShowConsoleMsg(val.name)
+        currName = val.name
+      end
+    end
+    
+    if currName ~= lastName then
+      reaper.SendMIDIMessageToHardware(id, createSysex(currName))
+      lastName = currName
+    end
+    --[[
+    if  getCurrRegionNane() ~= lastName then
       lastRegion = getCurrRegionNane()
       reaper.SendMIDIMessageToHardware(id, createSysex(getCurrRegionNane()))
       --reaper.ShowConsoleMsg("Invio\n")
     end
-  end
+    --]]
   reaper.defer(loop)
 end
 
 
 setCommandState(1)
-reaper.atexit(function() setCommandState(0) end)
+reaper.atexit(function() 
+setCommandState(0)
+reaper.SendMIDIMessageToHardware(id, createSysex("Not synchronized"))
+end)
 
 loop()
