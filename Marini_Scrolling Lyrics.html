@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>REAPER MIDI Text Lyrics</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0"/>
+    <style>
+        /* Minimal, Modern Dark Theme */
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000000;
+            color: #ffffff;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        /* Top Bar for Track Selection */
+        .top-bar {
+            flex: 0 0 auto;
+            padding: 15px 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #111111;
+            border-bottom: 1px solid #222;
+            z-index: 10;
+        }
+
+        .top-bar label {
+            font-size: clamp(0.9rem, 2.5vw, 1.2rem);
+            letter-spacing: 2px;
+            margin-right: 15px;
+            color: #888;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+
+        /* Hide native spinner arrows */
+        input[type="number"]::-webkit-inner-spin-button,
+        input[type="number"]::-webkit-outer-spin-button {
+            -webkit-appearance: none;
+            margin: 0;
+        }
+        input[type="number"] {
+            -moz-appearance: textfield;
+        }
+
+        .top-bar input {
+            background: #222;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: clamp(1.2rem, 3vw, 1.5rem);
+            width: 50px;
+            text-align: center;
+            outline: none;
+            transition: all 0.2s ease;
+            margin: 0 10px;
+        }
+
+        .top-bar input:focus {
+            border-color: #fff;
+            background: #333;
+        }
+
+        /* Custom UI Buttons for Track Selection */
+        .track-btn {
+            background: #222;
+            color: #ccc;
+            border: 1px solid #444;
+            border-radius: 6px;
+            width: 40px;
+            height: 40px;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.2s ease;
+            user-select: none;
+            -webkit-user-select: none;
+        }
+
+        .track-btn:hover {
+            background: #333;
+            color: #fff;
+            border-color: #666;
+        }
+
+        .track-btn:active {
+            background: #444;
+            transform: scale(0.95);
+        }
+
+        /* Lyrics Display Area */
+        .lyrics-container {
+            flex: 1 1 auto;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            width: 100%;
+            mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);
+            -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 25%, black 75%, transparent 100%);
+        }
+
+        .lyrics-scroll {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            transition: transform 0.3s ease-out;
+            box-sizing: border-box;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+
+        .lyric-line {
+            width: 100%;
+            text-align: center;
+            /* Significantly larger base font size */
+            font-size: clamp(1.8rem, 6vw, 3rem); 
+            color: #555;
+            padding: 15px 20px;
+            box-sizing: border-box;
+            transition: all 0.3s ease-out;
+            transform: scale(0.85);
+            white-space: pre-wrap;
+            font-weight: 500;
+            line-height: 1.2;
+        }
+
+        /* The Active Highlighted Middle Row */
+        .lyric-line.active {
+            color: #ffffff;
+            /* Significantly larger active font size */
+            font-size: clamp(3.5rem, 12vw, 7rem);
+            font-weight: 800;
+            transform: scale(1);
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.3);
+        }
+        
+        .empty-state {
+            text-align: center;
+            color: #555;
+            font-size: clamp(1.2rem, 4vw, 1.8rem);
+            font-style: italic;
+            margin-top: 40vh;
+        }
+    </style>
+    
+    <script src="main.js"></script>
+</head>
+<body>
+
+    <div class="top-bar">
+        <label>Track</label>
+        <button class="track-btn" onclick="step_track(-1)">−</button>
+        <input type="number" id="track-input" value="1" min="1" onchange="handle_track_change(this.value)">
+        <button class="track-btn" onclick="step_track(1)">+</button>
+    </div>
+
+    <div class="lyrics-container" id="lyrics-container">
+        <div class="lyrics-scroll" id="lyrics-scroll">
+            <div class="empty-state">Waiting for playback or lyrics...</div>
+        </div>
+    </div>
+
+<script type="text/javascript">
+
+let lyrictrack = 1;
+let playpos = ""; 
+let currentPosVal = 0; 
+let lyricstr = "";
+
+let lyricsEvents = []; 
+let activeLyricIndex = -1;
+
+////////////////////////////////////////////////////////////
+// HELPER: Convert "Measure.Beat.Fraction" to a Number
+////////////////////////////////////////////////////////////
+function getPositionValue(posString) {
+    let parts = posString.split('.');
+    let m = parseInt(parts[0] || 0, 10);
+    let b = parseInt(parts[1] || 0, 10);
+    let f = parseInt(parts[2] || 0, 10);
+    return (m * 100000) + (b * 1000) + f;
+}
+
+////////////////////////////////////////////////////////////
+// PARSING LOGIC
+////////////////////////////////////////////////////////////
+function parse_lyrics(tok) {
+    lyricsEvents = [];
+    
+    for (let i = 2; i < tok.length - 1; i += 2) {
+        let text = typeof simple_unescape === 'function' ? simple_unescape(tok[i+1]) : tok[i+1];
+        text = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        
+        lyricsEvents.push({
+            posStr: tok[i],
+            posVal: getPositionValue(tok[i]),
+            text: text
+        });
+    }
+
+    lyricsEvents.sort((a, b) => a.posVal - b.posVal);
+
+    render_lyrics();
+    update_active_lyric();
+}
+
+////////////////////////////////////////////////////////////
+// UI UPDATES
+////////////////////////////////////////////////////////////
+function render_lyrics() {
+    const scrollContainer = document.getElementById('lyrics-scroll');
+    
+    if (lyricsEvents.length === 0) {
+        scrollContainer.innerHTML = `<div class="empty-state">(No MIDI lyrics found on track ${lyrictrack})</div>`;
+        scrollContainer.style.transform = `translateY(0px)`;
+        return;
+    }
+
+    scrollContainer.innerHTML = '';
+    lyricsEvents.forEach((eventObj, index) => {
+        const div = document.createElement('div');
+        div.className = 'lyric-line';
+        div.id = 'lyric-' + index;
+        div.innerHTML = eventObj.text; 
+        scrollContainer.appendChild(div);
+    });
+    
+    activeLyricIndex = -1; 
+    update_active_lyric();
+}
+
+function update_active_lyric() {
+    if (lyricsEvents.length === 0) return;
+
+    let newIndex = -1;
+    
+    for (let i = 0; i < lyricsEvents.length; i++) {
+        if (lyricsEvents[i].posVal <= currentPosVal) {
+            newIndex = i;
+        } else {
+            break; 
+        }
+    }
+    
+    newIndex = Math.max(0, newIndex);
+
+    if (newIndex !== activeLyricIndex) {
+        activeLyricIndex = newIndex;
+        scroll_to_active();
+    }
+}
+
+function scroll_to_active() {
+    if (activeLyricIndex === -1 || lyricsEvents.length === 0) return;
+    
+    const wrapper = document.getElementById('lyrics-container');
+    const scrollContainer = document.getElementById('lyrics-scroll');
+    const lines = scrollContainer.children;
+    
+    for (let i = 0; i < lines.length; i++) {
+        if (i === activeLyricIndex) {
+            lines[i].classList.add('active');
+        } else {
+            lines[i].classList.remove('active');
+        }
+    }
+    
+    const activeEl = lines[activeLyricIndex];
+    if (activeEl && wrapper) {
+        const wrapperCenter = wrapper.offsetHeight / 2;
+        const elementCenter = activeEl.offsetTop + (activeEl.offsetHeight / 2);
+        const offset = wrapperCenter - elementCenter; 
+        
+        scrollContainer.style.transform = `translateY(${offset}px)`;
+    }
+}
+
+////////////////////////////////////////////////////////////
+// REAPER COMMUNICATION
+////////////////////////////////////////////////////////////
+function wwr_onreply(results) {
+    let ar = results.split("\n");
+    for (let i = 0; i < ar.length; ++i) {
+        let tok = ar[i].split("\t");
+        if (tok && tok.length > 0) {
+            switch (tok[0]) {
+                case "TRANSPORT":
+                    if (tok.length > 5) {
+                        if (playpos !== tok[5]) {
+                            playpos = tok[5];
+                            currentPosVal = getPositionValue(playpos);
+                            update_active_lyric();
+                        }
+                    }
+                    break;
+                case "LYRICS":
+                    if (tok.length >= 2) {
+                        if (lyrictrack == tok[1] && lyricstr !== ar[i]) {
+                            lyricstr = ar[i];
+                            parse_lyrics(tok);
+                        }
+                    }
+                    break;
+            }
+        }
+    }
+}
+
+function step_track(delta) {
+    const input = document.getElementById('track-input');
+    let current = parseInt(input.value, 10) || 1;
+    let next = current + delta;
+    if (next < 1) next = 1;
+    
+    input.value = next;
+    handle_track_change(next);
+}
+
+function handle_track_change(newTrackValue) {
+    let tr = parseInt(newTrackValue, 10);
+    
+    if (tr > 0 && tr != lyrictrack) {
+        if (typeof wwr_req_recur_cancel === "function") {
+            wwr_req_recur_cancel("LYRICS/" + lyrictrack);
+        }
+        
+        wwr_req_recur("LYRICS/" + tr, 2000);
+        
+        lyrictrack = tr;
+        lyricstr = "";
+        lyricsEvents = [];
+        activeLyricIndex = -1;
+        
+        const scrollContainer = document.getElementById('lyrics-scroll');
+        scrollContainer.innerHTML = `<div class="empty-state">Loading track ${tr}...</div>`;
+        scrollContainer.style.transform = `translateY(0px)`;
+    }
+}
+
+////////////////////////////////////////////////////////////
+// INITIALIZATION
+////////////////////////////////////////////////////////////
+window.onload = function() {
+    wwr_req_recur("TRANSPORT", 20);
+    wwr_req_recur("LYRICS/" + lyrictrack, 2000);
+    wwr_start();
+};
+
+window.addEventListener('resize', scroll_to_active);
+
+</script>
+</body>
+</html>
