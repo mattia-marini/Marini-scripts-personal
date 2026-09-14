@@ -1,17 +1,16 @@
 --[[
-    REAPER Export Validator
+REAPER Export Validator
 
-    Message box:
-      - Shows only pass/fail status for each test.
-      - YES = View More -> prints full details to console.
-      - NO  = Dismiss
+Message box:
+  - Shows only pass/fail status for each test.
+  - YES = View More -> prints full details to console.
+  - NO  = Dismiss
 
-    The script does not modify the project.
+The script does not modify the project.
+
 --]]
 
-------------------------------------------------------------
 -- Configuration
-------------------------------------------------------------
 
 local SONG_FOLDER_NAME  = "Song"
 local OTHER_FOLDER_NAME = "Other"
@@ -40,9 +39,7 @@ local FOLDER_SENDS = {
     ["Unused"]     = { 11, 12 },
 }
 
-------------------------------------------------------------
 -- Utility functions
-------------------------------------------------------------
 
 local function getTrackName(track)
     local _, name = reaper.GetSetMediaTrackInfo_String(
@@ -85,9 +82,7 @@ local function formatTrackName(track)
     return '"' .. name .. '"'
 end
 
-------------------------------------------------------------
 -- Find folders
-------------------------------------------------------------
 
 local function findFoldersByName(name)
     local result = {}
@@ -108,9 +103,7 @@ local function findFoldersByName(name)
     return result
 end
 
-------------------------------------------------------------
 -- Get direct children of a folder
-------------------------------------------------------------
 
 local function getDirectChildren(folder)
     local children = {}
@@ -143,15 +136,13 @@ local function getDirectChildren(folder)
     return children
 end
 
-------------------------------------------------------------
 -- Explicit send utilities
---
+
 -- These are ONLY used for:
 --
 --     folder -> Song track
 --
 -- They are NOT used for child -> parent routing.
-------------------------------------------------------------
 
 local function findSend(track, destination)
     local sendCount =
@@ -174,9 +165,7 @@ local function findSend(track, destination)
     return nil
 end
 
-------------------------------------------------------------
 -- Check 1: Song folder
-------------------------------------------------------------
 
 local function checkSongFolder(details)
     local songs =
@@ -271,9 +260,7 @@ local function checkSongFolder(details)
     return passed, song, childrenByName
 end
 
-------------------------------------------------------------
 -- Check 2: Other folder
-------------------------------------------------------------
 
 local function checkOtherFolder(details)
     local others =
@@ -301,9 +288,7 @@ local function checkOtherFolder(details)
     return passed, others[1]
 end
 
-------------------------------------------------------------
 -- Find Midi track
-------------------------------------------------------------
 
 local function findMidiTrack(other, details)
     if not other then
@@ -336,9 +321,7 @@ local function findMidiTrack(other, details)
     return found
 end
 
-------------------------------------------------------------
 -- Find region
-------------------------------------------------------------
 
 local function findRegionByName(name)
     local markerCount =
@@ -370,9 +353,7 @@ local function findRegionByName(name)
     return nil
 end
 
-------------------------------------------------------------
 -- Check 3: Midi / Bonds
-------------------------------------------------------------
 
 local function checkMidiAndBonds(details, midiTrack)
     local passed = true
@@ -580,16 +561,58 @@ local function checkMidiAndBonds(details, midiTrack)
     return passed, bondsRegion
 end
 
-------------------------------------------------------------
--- Check 4a: Folder channel count
-------------------------------------------------------------
+-- Get parent folder
 
-local function checkFolderChannels(
-    details,
+local function getParentFolder(track)
+    if reaper.GetParentTrack then
+        return reaper.GetParentTrack(track)
+    end
+
+    local trackIndex =
+        getTrackIndex(track)
+
+    local depth = 0
+
+    for i = trackIndex - 1, 0, -1 do
+        local candidate =
+            reaper.GetTrack(0, i)
+
+        local candidateDepth =
+            reaper.GetMediaTrackInfo_Value(
+                candidate,
+                "I_FOLDERDEPTH"
+            )
+
+        depth = depth - candidateDepth
+
+        if isFolder(candidate) then
+            depth = depth + 1
+
+            if depth == 1 then
+                return candidate
+            end
+        end
+    end
+
+    return nil
+end
+
+local function isExcludedFolder(
+    folder,
     song,
     other
 )
-    local passed = true
+    return folder == song
+        or folder == other
+end
+
+-- Get top-level folders
+
+local function getTopLevelFolders(
+    song,
+    other
+)
+    local result = {}
 
     local trackCount =
         reaper.CountTracks(0)
@@ -599,36 +622,67 @@ local function checkFolderChannels(
             reaper.GetTrack(0, i)
 
         if isFolder(track)
-            and track ~= song
-            and track ~= other
+            and not isExcludedFolder(
+                track,
+                song,
+                other
+            )
         then
-            local channels =
-                math.floor(
-                    reaper.GetMediaTrackInfo_Value(
-                        track,
-                        "I_NCHAN"
-                    )
-                )
+            local parent =
+                getParentFolder(track)
 
-            if channels ~= 12 then
-                passed = false
-
-                details[#details + 1] =
-                    string.format(
-                        '[FAIL] Folder %s has %d channels; expected 12.',
-                        formatTrackName(track),
-                        channels
-                    )
+            if not parent then
+                result[#result + 1] = track
             end
+        end
+    end
+
+    return result
+end
+
+-- Check 4a: Top-level folder channel count
+--
+-- Song and Other are excluded.
+-- Nested folders are NOT checked.
+
+local function checkFolderChannels(
+    details,
+    song,
+    other
+)
+    local passed = true
+
+    local topLevelFolders =
+        getTopLevelFolders(
+            song,
+            other
+        )
+
+    for _, folder in ipairs(topLevelFolders) do
+        local channels =
+            math.floor(
+                reaper.GetMediaTrackInfo_Value(
+                    folder,
+                    "I_NCHAN"
+                )
+            )
+
+        if channels ~= 12 then
+            passed = false
+
+            details[#details + 1] =
+                string.format(
+                    '[FAIL] Folder %s has %d channels; expected 12.',
+                    formatTrackName(folder),
+                    channels
+                )
         end
     end
 
     return passed
 end
 
-------------------------------------------------------------
 -- Parent-send utilities
-------------------------------------------------------------
 
 local function getParentSendInfo(track)
     local enabled =
@@ -662,9 +716,7 @@ local function getParentSendInfo(track)
     return true, offset
 end
 
-------------------------------------------------------------
 -- Format parent-send channels
-------------------------------------------------------------
 
 local function formatParentChannels(offset)
     local firstChannel = offset + 1
@@ -677,11 +729,9 @@ local function formatParentChannels(offset)
     )
 end
 
-------------------------------------------------------------
 -- Check 4b: Child -> parent routing
---
+
 -- Song and Other are intentionally excluded.
-------------------------------------------------------------
 
 local function checkFolderChildrenParentSend(
     details,
@@ -725,11 +775,13 @@ local function checkFolderChildrenParentSend(
     return passed
 end
 
-------------------------------------------------------------
 -- Build folder routing tree
-------------------------------------------------------------
 
-local function buildFolderRoutingTree(folder, lines, prefix)
+local function buildFolderRoutingTree(
+    folder,
+    lines,
+    prefix
+)
     lines[#lines + 1] =
         prefix .. getTrackName(folder)
 
@@ -780,11 +832,9 @@ local function buildFolderRoutingTree(folder, lines, prefix)
     end
 end
 
-------------------------------------------------------------
 -- Add routing trees to full report
---
+
 -- Song and Other are excluded.
-------------------------------------------------------------
 
 local function addFolderRoutingTrees(
     details,
@@ -832,13 +882,10 @@ local function addFolderRoutingTrees(
     end
 end
 
-------------------------------------------------------------
--- Check 4c: Folder -> Song sends
+-- Check 4c: Top-level folder -> Song sends
 --
--- IMPORTANT:
--- Other is excluded here as well. It must not be checked
--- for sends to Song tracks.
-------------------------------------------------------------
+-- Song and Other are excluded.
+-- Nested folders are NOT checked.
 
 local function checkFolderSongSends(
     details,
@@ -852,86 +899,81 @@ local function checkFolderSongSends(
 
     local passed = true
 
-    local trackCount =
-        reaper.CountTracks(0)
+    local topLevelFolders =
+        getTopLevelFolders(
+            song,
+            other
+        )
 
-    for i = 0, trackCount - 1 do
-        local folder =
-            reaper.GetTrack(0, i)
+    for _, folder in ipairs(topLevelFolders) do
+        for destinationName, channels
+            in pairs(FOLDER_SENDS)
+        do
+            local destination =
+                songTracks[
+                    normalizedName(destinationName)
+                ]
 
-        if isFolder(folder)
-            and folder ~= song
-            and folder ~= other
-        then
-            for destinationName, channels
-                in pairs(FOLDER_SENDS)
-            do
-                local destination =
-                    songTracks[
-                        normalizedName(destinationName)
-                    ]
+            if destination then
+                local sendIndex =
+                    findSend(
+                        folder,
+                        destination
+                    )
 
-                if destination then
-                    local sendIndex =
-                        findSend(
+                if not sendIndex then
+                    passed = false
+
+                    details[#details + 1] =
+                        string.format(
+                            '[FAIL] Folder %s has no send to Song track "%s".',
+                            formatTrackName(folder),
+                            destinationName
+                        )
+                else
+                    local sourceChannel =
+                        reaper.GetTrackSendInfo_Value(
                             folder,
-                            destination
+                            0,
+                            sendIndex,
+                            "I_SRCCHAN"
                         )
 
-                    if not sendIndex then
+                    local expectedSource =
+                        channels[1] - 1
+
+                    if sourceChannel ~= expectedSource then
                         passed = false
 
                         details[#details + 1] =
                             string.format(
-                                '[FAIL] Folder %s has no send to Song track "%s".',
+                                '[FAIL] Send from %s to "%s" starts at channel %d; expected channels %d-%d.',
                                 formatTrackName(folder),
-                                destinationName
+                                destinationName,
+                                sourceChannel + 1,
+                                channels[1],
+                                channels[2]
                             )
-                    else
-                        local sourceChannel =
-                            reaper.GetTrackSendInfo_Value(
-                                folder,
-                                0,
-                                sendIndex,
-                                "I_SRCCHAN"
+                    end
+
+                    local destinationChannel =
+                        reaper.GetTrackSendInfo_Value(
+                            folder,
+                            0,
+                            sendIndex,
+                            "I_DSTCHAN"
+                        )
+
+                    if destinationChannel ~= 0 then
+                        passed = false
+
+                        details[#details + 1] =
+                            string.format(
+                                '[FAIL] Send from %s to "%s" is routed to destination channels %d+; expected 1-2.',
+                                formatTrackName(folder),
+                                destinationName,
+                                destinationChannel + 1
                             )
-
-                        local expectedSource =
-                            channels[1] - 1
-
-                        if sourceChannel ~= expectedSource then
-                            passed = false
-
-                            details[#details + 1] =
-                                string.format(
-                                    '[FAIL] Send from %s to "%s" starts at channel %d; expected channels %d-%d.',
-                                    formatTrackName(folder),
-                                    destinationName,
-                                    sourceChannel + 1,
-                                    channels[1],
-                                    channels[2]
-                                )
-                        end
-
-                        local destinationChannel =
-                            reaper.GetTrackSendInfo_Value(
-                                folder,
-                                0,
-                                sendIndex,
-                                "I_DSTCHAN"
-                            )
-
-                        if destinationChannel ~= 0 then
-                            passed = false
-
-                            details[#details + 1] =
-                                string.format(
-                                    '[FAIL] Send from %s to "%s" is routed to destination channels %d+; expected 1-2.',
-                                    formatTrackName(folder),
-                                    destinationName,
-                                    destinationChannel + 1
-                                )
-                        end
                     end
                 end
             end
@@ -941,9 +983,7 @@ local function checkFolderSongSends(
     return passed
 end
 
-------------------------------------------------------------
 -- Check 4: Complete folder routing
-------------------------------------------------------------
 
 local function checkFolderRouting(
     details,
@@ -979,9 +1019,7 @@ local function checkFolderRouting(
         and songSendsPassed
 end
 
-------------------------------------------------------------
 -- Check 5: Bonds region
-------------------------------------------------------------
 
 local function checkBondsRegion(details)
     local region =
@@ -1004,99 +1042,9 @@ local function checkBondsRegion(details)
     return true
 end
 
-------------------------------------------------------------
--- Get parent folder
-------------------------------------------------------------
-
-local function getParentFolder(track)
-    if reaper.GetParentTrack then
-        return reaper.GetParentTrack(track)
-    end
-
-    local trackIndex =
-        getTrackIndex(track)
-
-    local depth = 0
-
-    for i = trackIndex - 1, 0, -1 do
-        local candidate =
-            reaper.GetTrack(0, i)
-
-        local candidateDepth =
-            reaper.GetMediaTrackInfo_Value(
-                candidate,
-                "I_FOLDERDEPTH"
-            )
-
-        depth = depth - candidateDepth
-
-        if isFolder(candidate) then
-            depth = depth + 1
-
-            if depth == 1 then
-                return candidate
-            end
-        end
-    end
-
-    return nil
-end
-
-------------------------------------------------------------
--- Determine whether a folder is excluded from the
--- top-level folder/marker comparison.
-------------------------------------------------------------
-
-local function isExcludedFolder(
-    folder,
-    song,
-    other
-)
-    return folder == song
-        or folder == other
-end
-
-------------------------------------------------------------
--- Get top-level folders
-------------------------------------------------------------
-
-local function getTopLevelFolders(
-    song,
-    other
-)
-    local result = {}
-
-    local trackCount =
-        reaper.CountTracks(0)
-
-    for i = 0, trackCount - 1 do
-        local track =
-            reaper.GetTrack(0, i)
-
-        if isFolder(track)
-            and not isExcludedFolder(
-                track,
-                song,
-                other
-            )
-        then
-            local parent =
-                getParentFolder(track)
-
-            if not parent then
-                result[#result + 1] = track
-            end
-        end
-    end
-
-    return result
-end
-
-------------------------------------------------------------
 -- Get project markers only
 --
 -- Regions are ignored.
-------------------------------------------------------------
 
 local function getProjectMarkers()
     local markers = {}
@@ -1132,9 +1080,7 @@ local function getProjectMarkers()
     return markers
 end
 
-------------------------------------------------------------
 -- Check 6: Top-level folder names vs markers
-------------------------------------------------------------
 
 local function checkTopLevelFolderNames(
     details,
@@ -1197,9 +1143,7 @@ local function checkTopLevelFolderNames(
     return passed
 end
 
-------------------------------------------------------------
 -- Main
-------------------------------------------------------------
 
 local function main()
     local details = {}
