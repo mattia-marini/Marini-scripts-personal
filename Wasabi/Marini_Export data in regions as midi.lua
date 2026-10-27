@@ -46,6 +46,11 @@ local END_EVENT_TEXT = "%name end"
 -- the Text event keeps tick 0 occupied so the clip still starts at the region
 -- start. Set to 0 to write at tick 0 like a normal MIDI file.
 local START_TEMPO_TICK = 0
+-- REAPER project markers (MIDI Marker meta events) written at the very start
+-- and at the very end of each file. "%name" expands to the region name.
+-- Use "" to disable either one.
+local START_MARKER_TEXT = "%name  -  START"
+local END_MARKER_TEXT = "%name - END"
 -- Write a tempo event at the region's last tick, equal to the last tempo in
 -- effect inside the region. This gives every file at least two tempo events,
 -- which REAPER needs in order to import the tempo map when files are dragged in.
@@ -148,6 +153,10 @@ local function timesig_event(num, den)
   while (2 ^ power) < den and power < 7 do power = power + 1 end
   -- MIDI encodes the denominator as log2(denominator).
   return meta_event(0x58, string.char(num, power, 24, 8))
+end
+
+local function expand_name(template, name)
+  return (template:gsub("%%name", function() return name end))
 end
 
 local function text_event(text)
@@ -368,6 +377,15 @@ local function main()
       if END_EVENT_TEXT ~= "" then
         events[#events + 1] = { tick = end_tick, order = 9,
           data = text_event((END_EVENT_TEXT:gsub("%%name", function() return region.name end))) }
+      end
+
+      if START_MARKER_TEXT ~= "" then
+        events[#events + 1] = { tick = 0, order = 6,
+          data = marker_event(expand_name(START_MARKER_TEXT, region.name)) }
+      end
+      if END_MARKER_TEXT ~= "" then
+        events[#events + 1] = { tick = end_tick, order = 10,
+          data = marker_event(expand_name(END_MARKER_TEXT, region.name)) }
       end
 
       if LOG_TO_CONSOLE then
